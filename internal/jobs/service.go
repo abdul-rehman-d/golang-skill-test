@@ -30,6 +30,12 @@ type Processor interface {
 	Process(ctx context.Context, payload string) error
 }
 
+var (
+	// internal errors
+	ErrQueueFull       = errors.New("job queue is full")
+	ErrServiceStopping = errors.New("service is stopping")
+)
+
 type Service struct {
 	mu        sync.RWMutex
 	jobs      map[string]*Job
@@ -102,7 +108,7 @@ func (s *Service) Create(ctx context.Context, payload string) (*Job, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.stopping.Load() {
-		return nil, errors.New("service is stopping")
+		return nil, ErrServiceStopping
 	}
 
 	// ctx.Err() replaces the ctx.Done() select case
@@ -128,7 +134,7 @@ func (s *Service) Create(ctx context.Context, payload string) (*Job, error) {
 	default:
 		// rejected immediately
 		delete(s.jobs, id)
-		return nil, errors.New("job queue is full")
+		return nil, ErrQueueFull
 	}
 }
 

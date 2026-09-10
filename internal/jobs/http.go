@@ -1,7 +1,9 @@
 package jobs
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -37,11 +39,16 @@ func RegisterHandlers(mux *http.ServeMux, service *Service) {
 
 		job, err := service.Create(r.Context(), req.Payload)
 		if err != nil {
-			if strings.Contains(err.Error(), "queue is full") {
-				writeError(w, http.StatusServiceUnavailable, err.Error())
-				return
+			switch {
+			case errors.Is(err, ErrQueueFull):
+				writeError(w, http.StatusServiceUnavailable, "job queue is full")
+			case errors.Is(err, ErrServiceStopping):
+				writeError(w, http.StatusServiceUnavailable, "service is stopping")
+			case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+				writeError(w, http.StatusRequestTimeout, "request canceled")
+			default:
+				writeError(w, http.StatusInternalServerError, "unable to create job")
 			}
-			writeError(w, http.StatusServiceUnavailable, err.Error())
 			return
 		}
 		writeJSON(w, http.StatusCreated, job)
