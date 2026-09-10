@@ -30,12 +30,14 @@ type Processor interface {
 }
 
 var (
-	// internal errors
-	ErrQueueFull       = errors.New("job queue is full")
+	// ErrQueueFull is returned when a job cannot be queued without blocking.
+	ErrQueueFull = errors.New("job queue is full")
+	// ErrServiceStopping is returned after service shutdown has started.
 	ErrServiceStopping = errors.New("service is stopping")
 )
 
 type Service struct {
+	// mu serializes queue admission with shutdown and protects mutable job state.
 	mu        sync.RWMutex
 	jobs      map[string]*Job
 	queue     chan string
@@ -108,8 +110,6 @@ func (s *Service) Create(ctx context.Context, payload string) (*Job, error) {
 		return nil, ErrServiceStopping
 	}
 
-	// ctx.Err() replaces the ctx.Done() select case
-	// since there is no waiting now
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -127,10 +127,8 @@ func (s *Service) Create(ctx context.Context, payload string) (*Job, error) {
 
 	select {
 	case s.queue <- id:
-		// accepted immediately
 		return cloneJob(job), nil
 	default:
-		// rejected immediately
 		delete(s.jobs, id)
 		return nil, ErrQueueFull
 	}
