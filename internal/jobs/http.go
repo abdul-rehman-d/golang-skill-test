@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 )
@@ -10,13 +11,25 @@ type createJobRequest struct {
 	Payload string `json:"payload"`
 }
 
+const MAX_REQUEST_BODY = 1 << 20 // 1 MiB
+
 func RegisterHandlers(mux *http.ServeMux, service *Service) {
 	mux.HandleFunc("POST /jobs", func(w http.ResponseWriter, r *http.Request) {
 		var req createJobRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid JSON")
+
+		r.Body = http.MaxBytesReader(w, r.Body, MAX_REQUEST_BODY)
+
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}
+
+		if err := json.Unmarshal(body, &req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+
 		if strings.TrimSpace(req.Payload) == "" {
 			writeError(w, http.StatusBadRequest, "payload is required")
 			return
