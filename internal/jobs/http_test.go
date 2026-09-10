@@ -83,6 +83,20 @@ func TestPostJobsCreatesQueuedJob(t *testing.T) {
 	}
 }
 
+func TestPostJobsRejectsOversizedBody(t *testing.T) {
+	s := NewService(1, 1)
+	t.Cleanup(s.Stop)
+
+	body := `{"payload":"` + strings.Repeat("a", maxRequestBody) + `"}`
+	recorder := performRequest(s, http.MethodPost, "/jobs", body)
+	if recorder.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusRequestEntityTooLarge, recorder.Body.String())
+	}
+
+	assertJSONContentType(t, recorder)
+	assertErrorResponse(t, recorder)
+}
+
 func TestGetJobsReturnsCreatedJob(t *testing.T) {
 	s := NewService(1, 1)
 	t.Cleanup(s.Stop)

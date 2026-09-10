@@ -13,16 +13,21 @@ type createJobRequest struct {
 	Payload string `json:"payload"`
 }
 
-const MAX_REQUEST_BODY = 1 << 20 // 1 MiB
+const maxRequestBody = 1 << 20 // 1 MiB
 
 func RegisterHandlers(mux *http.ServeMux, service *Service) {
 	mux.HandleFunc("POST /jobs", func(w http.ResponseWriter, r *http.Request) {
 		var req createJobRequest
 
-		r.Body = http.MaxBytesReader(w, r.Body, MAX_REQUEST_BODY)
+		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
 
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
+			var maxBytesError *http.MaxBytesError
+			if errors.As(err, &maxBytesError) {
+				writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+				return
+			}
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}
