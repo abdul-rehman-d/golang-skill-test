@@ -118,6 +118,9 @@ func (s *Service) Create(ctx context.Context, payload string) (*Job, error) {
 		s.mu.Unlock()
 		return nil, ctx.Err()
 	default:
+		s.mu.Lock()
+		delete(s.jobs, id)
+		s.mu.Unlock()
 		return nil, errors.New("job queue is full")
 	}
 }
