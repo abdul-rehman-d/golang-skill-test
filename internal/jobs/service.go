@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -40,14 +39,13 @@ type Service struct {
 	mu        sync.RWMutex
 	jobs      map[string]*Job
 	queue     chan string
-	workers   int
 	processor Processor
-	stopping  atomic.Bool
+	stopping  bool
 	ctx       context.Context
 	cancel    context.CancelFunc
 	stopOnce  sync.Once
 	wg        sync.WaitGroup
-	sequence  atomic.Uint64
+	sequence  uint64
 }
 
 func NewService(workers, queueCapacity int) *Service {
@@ -62,7 +60,6 @@ func NewService(workers, queueCapacity int) *Service {
 	s := &Service{
 		jobs:      make(map[string]*Job),
 		queue:     make(chan string, queueCapacity),
-		workers:   workers,
 		processor: ProcessorFunc(defaultProcessor),
 		ctx:       ctx,
 		cancel:    cancel,
@@ -107,7 +104,7 @@ func containsFail(s string) bool {
 func (s *Service) Create(ctx context.Context, payload string) (*Job, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.stopping.Load() {
+	if s.stopping {
 		return nil, ErrServiceStopping
 	}
 
@@ -117,7 +114,8 @@ func (s *Service) Create(ctx context.Context, payload string) (*Job, error) {
 		return nil, err
 	}
 
-	id := fmt.Sprintf("job-%d", s.sequence.Add(1))
+	s.sequence++
+	id := fmt.Sprintf("job-%d", s.sequence)
 	job := &Job{
 		ID:        id,
 		Payload:   payload,
@@ -180,7 +178,7 @@ func (s *Service) process(id string) {
 func (s *Service) Stop() {
 	s.stopOnce.Do(func() {
 		s.mu.Lock()
-		s.stopping.Store(true)
+		s.stopping = true
 		s.cancel()
 		close(s.queue)
 		s.mu.Unlock()
