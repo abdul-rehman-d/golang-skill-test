@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -30,15 +29,25 @@ type Processor interface {
 	Process(ctx context.Context, payload string) error
 }
 
+var (
+	// ErrQueueFull is returned when a job cannot be queued without blocking.
+	ErrQueueFull = errors.New("job queue is full")
+	// ErrServiceStopping is returned after service shutdown has started.
+	ErrServiceStopping = errors.New("service is stopping")
+)
+
 type Service struct {
+	// mu serializes queue admission with shutdown and protects mutable job state.
 	mu        sync.RWMutex
 	jobs      map[string]*Job
 	queue     chan string
-	workers   int
 	processor Processor
-	stopping  atomic.Bool
+	stopping  bool
+	ctx       context.Context
+	cancel    context.CancelFunc
+	stopOnce  sync.Once
 	wg        sync.WaitGroup
-	sequence  atomic.Uint64
+	sequence  uint64
 }
 
 func NewService(workers, queueCapacity int) *Service {
@@ -49,11 +58,13 @@ func NewService(workers, queueCapacity int) *Service {
 		queueCapacity = 1
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
 	s := &Service{
 		jobs:      make(map[string]*Job),
 		queue:     make(chan string, queueCapacity),
-		workers:   workers,
 		processor: ProcessorFunc(defaultProcessor),
+		ctx:       ctx,
+		cancel:    cancel,
 	}
 	s.wg.Add(workers)
 	for i := 0; i < workers; i++ {
@@ -93,11 +104,18 @@ func containsFail(s string) bool {
 }
 
 func (s *Service) Create(ctx context.Context, payload string) (*Job, error) {
-	if s.stopping.Load() {
-		return nil, errors.New("service is stopping")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stopping {
+		return nil, ErrServiceStopping
 	}
 
-	id := fmt.Sprintf("job-%d", s.sequence.Add(1))
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	s.sequence++
+	id := fmt.Sprintf("job-%d", s.sequence)
 	job := &Job{
 		ID:        id,
 		Payload:   payload,
@@ -105,20 +123,14 @@ func (s *Service) Create(ctx context.Context, payload string) (*Job, error) {
 		CreatedAt: time.Now().UTC(),
 	}
 
-	s.mu.Lock()
 	s.jobs[id] = job
-	s.mu.Unlock()
 
 	select {
 	case s.queue <- id:
 		return cloneJob(job), nil
-	case <-ctx.Done():
-		s.mu.Lock()
-		delete(s.jobs, id)
-		s.mu.Unlock()
-		return nil, ctx.Err()
 	default:
-		return nil, errors.New("job queue is full")
+		delete(s.jobs, id)
+		return nil, ErrQueueFull
 	}
 }
 
@@ -149,7 +161,7 @@ func (s *Service) process(id string) {
 	job.Status = StatusProcessing
 	s.mu.Unlock()
 
-	err := s.processor.Process(context.Background(), job.Payload)
+	err := s.processor.Process(s.ctx, job.Payload)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -162,11 +174,15 @@ func (s *Service) process(id string) {
 }
 
 func (s *Service) Stop() {
-	if s.stopping.Swap(true) {
-		return
-	}
-	close(s.queue)
-	s.wg.Wait()
+	s.stopOnce.Do(func() {
+		s.mu.Lock()
+		s.stopping = true
+		s.cancel()
+		close(s.queue)
+		s.mu.Unlock()
+
+		s.wg.Wait()
+	})
 }
 
 func cloneJob(j *Job) *Job {
