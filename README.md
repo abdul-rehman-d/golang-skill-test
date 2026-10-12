@@ -123,3 +123,12 @@ We will primarily evaluate:
 - Git workflow and clarity of commits
 
 Please do not spend time on cosmetic changes. Focus on correctness, reliability, and clear engineering decisions.
+
+## Implementation notes
+
+- Queue admission and queue closure use the same mutex, preventing a send from racing with shutdown.
+- Jobs are stored before enqueueing so workers cannot observe a missing record; rejected jobs are removed before `Create` returns.
+- The service owns the cancellation context passed to processors.
+- `Stop` rejects new work, cancels processing, closes the finite queue, and waits for every worker to exit.
+- Interrupted jobs become `failed` and retain an error message.
+- `POST /jobs` accepts one bounded JSON request value and maps service failures to stable HTTP responses.

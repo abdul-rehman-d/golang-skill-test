@@ -33,10 +33,19 @@ func main() {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	<-sigCh
 
+	// Mark the service as stopping first so active or newly arrived POST requests
+	// cannot enqueue work while the HTTP server drains its handlers.
+	service.Stop()
+
 	ctx, cancel := signalContext()
 	defer cancel()
-	_ = server.Shutdown(ctx)
-	service.Stop()
+
+	if err := server.Shutdown(ctx); err != nil {
+		log.Printf("graceful HTTP shutdown failed: %v", err)
+		if closeErr := server.Close(); closeErr != nil {
+			log.Printf("force HTTP shutdown failed: %v", closeErr)
+		}
+	}
 }
 
 func signalContext() (context.Context, context.CancelFunc) {
